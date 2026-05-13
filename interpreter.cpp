@@ -11,7 +11,6 @@
 
 namespace {
 
-// ---------- Runtime value ----------
 struct Value {
     enum class Tag { INT, STRING, ARRAY };
     Tag tag = Tag::INT;
@@ -20,27 +19,24 @@ struct Value {
     std::vector<long long> arr;
 };
 
-// ---------- Subprogram metadata ----------
 struct Param {
     std::string name;
     std::string type;
     bool isArray = false;
 };
 
-struct SubprogramDef {
+struct SubroutineDef {
     std::string name;
     bool isFunction = false;
     std::vector<Param> params;
     const CSTNode* block = nullptr;
 };
 
-// ---------- Scope frame ----------
 struct Scope {
     std::unordered_map<std::string, Value> vars;
 };
 
-// ---------- Postfix token kinds ----------
-enum class TokKind {
+enum class ToketType {
     INT_LIT,
     STRING_LIT,
     IDENT,
@@ -52,19 +48,18 @@ enum class TokKind {
     OP_NEG, OP_POS
 };
 
-struct PostfixTok {
-    TokKind kind;
+struct PostfixToken {
+    ToketType kind;
     long long i = 0;
     std::string s;
     int argc = 0;
 };
 
-class ReturnSignal {
+class ReturnType {
 public:
     Value value;
 };
 
-// ---------- CST helpers ----------
 std::vector<const CSTNode*> children_of(const CSTNode* node) {
     std::vector<const CSTNode*> out;
     for (const CSTNode* c = node ? node->leftChild : nullptr;
@@ -79,7 +74,6 @@ bool is_leaf_token(const CSTNode* n, const std::string& text) {
     return n != nullptr && n->leftChild == nullptr && n->label == text;
 }
 
-// ---------- Escape decoding ----------
 int hex_digit_value(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return 10 + c - 'a';
@@ -165,7 +159,9 @@ int decode_char_literal(const std::string& src) {
     }
 }
 
+// ---------------------------------
 // ---------- Interpreter ----------
+// ---------------------------------
 class Interpreter {
 public:
     Interpreter(const CSTNode* program, std::ostream& out)
@@ -176,7 +172,7 @@ public:
 private:
     const CSTNode* program_;
     std::ostream& out_;
-    std::unordered_map<std::string, SubprogramDef> subprograms_;
+    std::unordered_map<std::string, SubroutineDef> subprograms_;
     std::unordered_map<std::string, Value> globals_;
     std::vector<Scope> scopes_;
 
@@ -196,8 +192,8 @@ private:
 
     Value eval_(const CSTNode* expr);
     Value eval_assignment_expr_(const CSTNode* expr);
-    Value eval_postfix_(const std::vector<PostfixTok>& tokens, int line);
-    void emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& out);
+    Value eval_postfix_(const std::vector<PostfixToken>& tokens, int line);
+    void emit_postfix_(const CSTNode* node, std::vector<PostfixToken>& out);
 
     Value& lookup_var_ref_(const std::string& name, int line);
     Value lookup_var_(const std::string& name, int line);
@@ -242,10 +238,10 @@ Value Interpreter::lookup_var_(const std::string& name, int line) {
 void Interpreter::collect_subprograms_() {
     for (const CSTNode* d : children_of(program_)) {
         if (d->label == "function_decl") {
-            // children: [function, type_specifier, name, (, parameter_list, ), block]
+            // function
             auto ch = children_of(d);
             if (ch.size() < 7) continue;
-            SubprogramDef sp;
+            SubroutineDef sp;
             sp.name = ch[2]->label;
             sp.isFunction = true;
             sp.block = ch[6];
@@ -265,10 +261,10 @@ void Interpreter::collect_subprograms_() {
             subprograms_[sp.name] = sp;
         }
         else if (d->label == "procedure_decl") {
-            // children: [procedure, name, (, parameter_list, ), block]
+            // procedure
             auto ch = children_of(d);
             if (ch.size() < 6) continue;
-            SubprogramDef sp;
+            SubroutineDef sp;
             sp.name = ch[1]->label;
             sp.isFunction = false;
             sp.block = ch[5];
@@ -315,7 +311,7 @@ Value Interpreter::call_(const std::string& name, std::vector<Value> args, int l
         throw std::runtime_error(
             "undefined subprogram \"" + name + "\" on line " + std::to_string(line));
     }
-    const SubprogramDef& sp = it->second;
+    const SubroutineDef& sp = it->second;
 
     Scope frame;
     for (std::size_t i = 0; i < sp.params.size() && i < args.size(); ++i) {
@@ -339,7 +335,7 @@ Value Interpreter::call_(const std::string& name, std::vector<Value> args, int l
     try {
         exec_block_(sp.block);
     }
-    catch (const ReturnSignal& rs) {
+    catch (const ReturnType& rs) {
         result = rs.value;
     }
     scopes_.pop_back();
@@ -425,9 +421,9 @@ void Interpreter::exec_assign_or_call_stmt_(const CSTNode* stmt) {
 
     const std::string name = ch[0]->label;
 
-    // Indexed assignment: name [ idx_expr ] = expr ;
+    // Indexed assignment (name [idx]
     if (ch.size() >= 2 && ch[1]->label == "[") {
-        // children: [name, [, idx_expr, ], =, expr, ;]
+        // name
         Value idx = eval_(ch[2]);
         // ch[3] = ']', ch[4] = '=', ch[5] = expr
         if (ch.size() >= 6) {
@@ -442,9 +438,9 @@ void Interpreter::exec_assign_or_call_stmt_(const CSTNode* stmt) {
         return;
     }
 
-    // Simple assignment: name = expr ;
+    // Assignment
     if (ch.size() >= 2 && ch[1]->label == "=") {
-        // children: [name, =, expr, ;]
+        // name
         Value rhs = eval_(ch[2]);
         Value& slot = lookup_var_ref_(name, stmt->line);
         if (slot.tag == Value::Tag::ARRAY) {
@@ -469,7 +465,7 @@ void Interpreter::exec_assign_or_call_stmt_(const CSTNode* stmt) {
         return;
     }
 
-    // Call: name ( args ) ;
+    // Call
     if (ch.size() >= 2 && ch[1]->label == "(") {
         std::vector<Value> args;
         for (std::size_t i = 2; i < ch.size() && ch[i]->label != ")"; ++i) {
@@ -482,7 +478,7 @@ void Interpreter::exec_assign_or_call_stmt_(const CSTNode* stmt) {
 }
 
 void Interpreter::exec_if_stmt_(const CSTNode* stmt) {
-    // children: [if, (, cond, ), then-stmt, [else, else-stmt]?]
+    // if
     auto ch = children_of(stmt);
     if (ch.size() < 5) return;
 
@@ -496,7 +492,7 @@ void Interpreter::exec_if_stmt_(const CSTNode* stmt) {
 }
 
 void Interpreter::exec_while_stmt_(const CSTNode* stmt) {
-    // children: [while, (, cond, ), body]
+    // while
     auto ch = children_of(stmt);
     if (ch.size() < 5) return;
 
@@ -508,10 +504,10 @@ void Interpreter::exec_while_stmt_(const CSTNode* stmt) {
 }
 
 void Interpreter::exec_for_stmt_(const CSTNode* stmt) {
-    // children: [for, (, [init], ;, [cond], ;, [post], ), body]
+    // for
     auto ch = children_of(stmt);
 
-    // Walk past "for" "(" to find init/cond/post by semicolons.
+    // Find init/cond/post
     std::size_t pos = 0;
     if (pos < ch.size() && ch[pos]->label == "for") ++pos;
     if (pos < ch.size() && ch[pos]->label == "(") ++pos;
@@ -554,9 +550,9 @@ void Interpreter::exec_for_stmt_(const CSTNode* stmt) {
 }
 
 void Interpreter::exec_return_stmt_(const CSTNode* stmt) {
-    // children: [return, [expr], ;]
+    // return
     auto ch = children_of(stmt);
-    ReturnSignal rs;
+    ReturnType rs;
     rs.value.tag = Value::Tag::INT;
     rs.value.i = 0;
     if (ch.size() >= 2 && !is_leaf_token(ch[1], ";")) {
@@ -632,13 +628,12 @@ Value Interpreter::eval_(const CSTNode* expr) {
     if (expr->label == "assignment_expr") {
         return eval_assignment_expr_(expr);
     }
-    std::vector<PostfixTok> tokens;
+    std::vector<PostfixToken> tokens;
     emit_postfix_(expr, tokens);
     return eval_postfix_(tokens, expr->line);
 }
 
 Value Interpreter::eval_assignment_expr_(const CSTNode* expr) {
-    // children: [lhs(identifier_expr), =, rhs]
     auto ch = children_of(expr);
     if (ch.size() < 3) {
         Value v;
@@ -694,15 +689,15 @@ Value Interpreter::eval_assignment_expr_(const CSTNode* expr) {
     return rhs;
 }
 
-void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& out) {
+void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixToken>& out) {
     if (node == nullptr) return;
     const std::string& lbl = node->label;
     auto ch = children_of(node);
 
     if (lbl == "integer_literal") {
         if (!ch.empty()) {
-            PostfixTok t;
-            t.kind = TokKind::INT_LIT;
+            PostfixToken t;
+            t.kind = ToketType::INT_LIT;
             try {
                 t.i = std::stoll(ch[0]->label);
             }
@@ -715,8 +710,8 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
     }
     if (lbl == "boolean_literal") {
         if (!ch.empty()) {
-            PostfixTok t;
-            t.kind = TokKind::INT_LIT;
+            PostfixToken t;
+            t.kind = ToketType::INT_LIT;
             t.i = (ch[0]->label == "TRUE") ? 1 : 0;
             out.push_back(t);
         }
@@ -724,8 +719,8 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
     }
     if (lbl == "char_literal") {
         if (!ch.empty()) {
-            PostfixTok t;
-            t.kind = TokKind::INT_LIT;
+            PostfixToken t;
+            t.kind = ToketType::INT_LIT;
             t.i = decode_char_literal(ch[0]->label);
             out.push_back(t);
         }
@@ -733,8 +728,8 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
     }
     if (lbl == "string_literal") {
         if (!ch.empty()) {
-            PostfixTok t;
-            t.kind = TokKind::STRING_LIT;
+            PostfixToken t;
+            t.kind = ToketType::STRING_LIT;
             t.s = ch[0]->label;
             out.push_back(t);
         }
@@ -750,11 +745,11 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
         if (ch.size() == 2) {
             emit_postfix_(ch[1], out);
             const std::string& op = ch[0]->label;
-            PostfixTok t;
-            if (op == "-") t.kind = TokKind::OP_NEG;
-            else if (op == "+") t.kind = TokKind::OP_POS;
-            else if (op == "!") t.kind = TokKind::OP_NOT;
-            else t.kind = TokKind::OP_POS;
+            PostfixToken t;
+            if (op == "-") t.kind = ToketType::OP_NEG;
+            else if (op == "+") t.kind = ToketType::OP_POS;
+            else if (op == "!") t.kind = ToketType::OP_NOT;
+            else t.kind = ToketType::OP_POS;
             out.push_back(t);
         }
         return;
@@ -768,22 +763,22 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
             emit_postfix_(ch[2], out);
 
             const std::string& op = ch[1]->label;
-            PostfixTok t;
-            if (op == "+") t.kind = TokKind::OP_ADD;
-            else if (op == "-") t.kind = TokKind::OP_SUB;
-            else if (op == "*") t.kind = TokKind::OP_MUL;
-            else if (op == "/") t.kind = TokKind::OP_DIV;
-            else if (op == "%") t.kind = TokKind::OP_MOD;
-            else if (op == "^") t.kind = TokKind::OP_POW;
-            else if (op == "==") t.kind = TokKind::OP_EQ;
-            else if (op == "!=") t.kind = TokKind::OP_NE;
-            else if (op == "<") t.kind = TokKind::OP_LT;
-            else if (op == "<=") t.kind = TokKind::OP_LE;
-            else if (op == ">") t.kind = TokKind::OP_GT;
-            else if (op == ">=") t.kind = TokKind::OP_GE;
-            else if (op == "&&") t.kind = TokKind::OP_AND;
-            else if (op == "||") t.kind = TokKind::OP_OR;
-            else t.kind = TokKind::OP_ADD;
+            PostfixToken t;
+            if (op == "+") t.kind = ToketType::OP_ADD;
+            else if (op == "-") t.kind = ToketType::OP_SUB;
+            else if (op == "*") t.kind = ToketType::OP_MUL;
+            else if (op == "/") t.kind = ToketType::OP_DIV;
+            else if (op == "%") t.kind = ToketType::OP_MOD;
+            else if (op == "^") t.kind = ToketType::OP_POW;
+            else if (op == "==") t.kind = ToketType::OP_EQ;
+            else if (op == "!=") t.kind = ToketType::OP_NE;
+            else if (op == "<") t.kind = ToketType::OP_LT;
+            else if (op == "<=") t.kind = ToketType::OP_LE;
+            else if (op == ">") t.kind = ToketType::OP_GT;
+            else if (op == ">=") t.kind = ToketType::OP_GE;
+            else if (op == "&&") t.kind = ToketType::OP_AND;
+            else if (op == "||") t.kind = ToketType::OP_OR;
+            else t.kind = ToketType::OP_ADD;
             out.push_back(t);
         }
         return;
@@ -794,8 +789,8 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
         const std::string name = ch[0]->label;
 
         if (ch.size() == 1) {
-            PostfixTok t;
-            t.kind = TokKind::IDENT;
+            PostfixToken t;
+            t.kind = ToketType::IDENT;
             t.s = name;
             out.push_back(t);
             return;
@@ -808,8 +803,8 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
                 emit_postfix_(ch[i], out);
                 ++n;
             }
-            PostfixTok t;
-            t.kind = TokKind::CALL;
+            PostfixToken t;
+            t.kind = ToketType::CALL;
             t.s = name;
             t.argc = n;
             out.push_back(t);
@@ -818,27 +813,26 @@ void Interpreter::emit_postfix_(const CSTNode* node, std::vector<PostfixTok>& ou
 
         if (ch[1]->label == "[") {
             if (ch.size() >= 3) emit_postfix_(ch[2], out);
-            PostfixTok t;
-            t.kind = TokKind::INDEX;
+            PostfixToken t;
+            t.kind = ToketType::INDEX;
             t.s = name;
             out.push_back(t);
             return;
         }
 
-        PostfixTok t;
-        t.kind = TokKind::IDENT;
+        PostfixToken t;
+        t.kind = ToketType::IDENT;
         t.s = name;
         out.push_back(t);
         return;
     }
 
-    // Fallback: flatten children.
     for (const CSTNode* c : ch) {
         emit_postfix_(c, out);
     }
 }
 
-Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line) {
+Value Interpreter::eval_postfix_(const std::vector<PostfixToken>& tokens, int line) {
     std::vector<Value> stack;
     auto pop_int = [&]() -> long long {
         Value v = stack.back();
@@ -846,27 +840,27 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
         return v.i;
     };
 
-    for (const PostfixTok& t : tokens) {
+    for (const PostfixToken& t : tokens) {
         switch (t.kind) {
-        case TokKind::INT_LIT: {
+        case ToketType::INT_LIT: {
             Value v;
             v.tag = Value::Tag::INT;
             v.i = t.i;
             stack.push_back(std::move(v));
             break;
         }
-        case TokKind::STRING_LIT: {
+        case ToketType::STRING_LIT: {
             Value v;
             v.tag = Value::Tag::STRING;
             v.s = t.s;
             stack.push_back(std::move(v));
             break;
         }
-        case TokKind::IDENT: {
+        case ToketType::IDENT: {
             stack.push_back(lookup_var_(t.s, line));
             break;
         }
-        case TokKind::INDEX: {
+        case ToketType::INDEX: {
             long long idx = pop_int();
             Value arr = lookup_var_(t.s, line);
             Value v;
@@ -879,7 +873,7 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
             stack.push_back(std::move(v));
             break;
         }
-        case TokKind::CALL: {
+        case ToketType::CALL: {
             std::vector<Value> args(t.argc);
             for (int j = t.argc - 1; j >= 0; --j) {
                 args[j] = std::move(stack.back());
@@ -888,7 +882,7 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
             stack.push_back(call_(t.s, std::move(args), line));
             break;
         }
-        case TokKind::OP_NEG: {
+        case ToketType::OP_NEG: {
             long long a = pop_int();
             Value r;
             r.tag = Value::Tag::INT;
@@ -896,11 +890,11 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
             stack.push_back(r);
             break;
         }
-        case TokKind::OP_POS: {
-            // no-op, value already on stack
+        case ToketType::OP_POS: {
+            // no-op
             break;
         }
-        case TokKind::OP_NOT: {
+        case ToketType::OP_NOT: {
             long long a = pop_int();
             Value r;
             r.tag = Value::Tag::INT;
@@ -908,31 +902,31 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
             stack.push_back(r);
             break;
         }
-        case TokKind::OP_ADD: case TokKind::OP_SUB: case TokKind::OP_MUL:
-        case TokKind::OP_DIV: case TokKind::OP_MOD: case TokKind::OP_POW:
-        case TokKind::OP_EQ:  case TokKind::OP_NE:
-        case TokKind::OP_LT:  case TokKind::OP_LE:
-        case TokKind::OP_GT:  case TokKind::OP_GE:
-        case TokKind::OP_AND: case TokKind::OP_OR: {
+        case ToketType::OP_ADD: case ToketType::OP_SUB: case ToketType::OP_MUL:
+        case ToketType::OP_DIV: case ToketType::OP_MOD: case ToketType::OP_POW:
+        case ToketType::OP_EQ:  case ToketType::OP_NE:
+        case ToketType::OP_LT:  case ToketType::OP_LE:
+        case ToketType::OP_GT:  case ToketType::OP_GE:
+        case ToketType::OP_AND: case ToketType::OP_OR: {
             long long b = pop_int();
             long long a = pop_int();
             Value r;
             r.tag = Value::Tag::INT;
             switch (t.kind) {
-            case TokKind::OP_ADD: r.i = a + b; break;
-            case TokKind::OP_SUB: r.i = a - b; break;
-            case TokKind::OP_MUL: r.i = a * b; break;
-            case TokKind::OP_DIV:
+            case ToketType::OP_ADD: r.i = a + b; break;
+            case ToketType::OP_SUB: r.i = a - b; break;
+            case ToketType::OP_MUL: r.i = a * b; break;
+            case ToketType::OP_DIV:
                 if (b == 0) throw std::runtime_error("division by zero on line "
                                                      + std::to_string(line));
                 r.i = a / b;
                 break;
-            case TokKind::OP_MOD:
+            case ToketType::OP_MOD:
                 if (b == 0) throw std::runtime_error("modulo by zero on line "
                                                      + std::to_string(line));
                 r.i = a % b;
                 break;
-            case TokKind::OP_POW: {
+            case ToketType::OP_POW: {
                 long long val = 1;
                 long long base = a;
                 long long exp = b;
@@ -945,14 +939,14 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
                 r.i = val;
                 break;
             }
-            case TokKind::OP_EQ: r.i = (a == b) ? 1 : 0; break;
-            case TokKind::OP_NE: r.i = (a != b) ? 1 : 0; break;
-            case TokKind::OP_LT: r.i = (a < b)  ? 1 : 0; break;
-            case TokKind::OP_LE: r.i = (a <= b) ? 1 : 0; break;
-            case TokKind::OP_GT: r.i = (a > b)  ? 1 : 0; break;
-            case TokKind::OP_GE: r.i = (a >= b) ? 1 : 0; break;
-            case TokKind::OP_AND: r.i = (a != 0 && b != 0) ? 1 : 0; break;
-            case TokKind::OP_OR:  r.i = (a != 0 || b != 0) ? 1 : 0; break;
+            case ToketType::OP_EQ: r.i = (a == b) ? 1 : 0; break;
+            case ToketType::OP_NE: r.i = (a != b) ? 1 : 0; break;
+            case ToketType::OP_LT: r.i = (a < b)  ? 1 : 0; break;
+            case ToketType::OP_LE: r.i = (a <= b) ? 1 : 0; break;
+            case ToketType::OP_GT: r.i = (a > b)  ? 1 : 0; break;
+            case ToketType::OP_GE: r.i = (a >= b) ? 1 : 0; break;
+            case ToketType::OP_AND: r.i = (a != 0 && b != 0) ? 1 : 0; break;
+            case ToketType::OP_OR:  r.i = (a != 0 || b != 0) ? 1 : 0; break;
             default: break;
             }
             stack.push_back(r);
@@ -970,7 +964,7 @@ Value Interpreter::eval_postfix_(const std::vector<PostfixTok>& tokens, int line
     return stack.back();
 }
 
-} // namespace
+}
 
 InterpretResult interpret(const CSTNode* program_root, std::ostream& out) {
     InterpretResult result;
