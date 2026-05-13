@@ -396,12 +396,30 @@ CSTNode* Parser::parse_statement() {
     syntax_error(peek(), "unexpected token at start of statement");
 }
 
+namespace {
+
+int parse_array_size_lexeme(const Token& intTok) {
+    try {
+        return std::stoi(intTok.lexeme);
+    }
+    catch (const std::out_of_range&) {
+        throw ParseError(intTok.line,
+            "array declaration size must be a positive integer.");
+    }
+    catch (const std::invalid_argument&) {
+        throw ParseError(intTok.line,
+            "array declaration size must be a positive integer.");
+    }
+}
+
+} // namespace
+
 CSTNode* Parser::parse_array_size(int* outValue) {
     const Token& tok = peek();
 
     if (match(TokenType::INTEGER)) {
         if (outValue != nullptr) {
-            *outValue = std::stoi(previous().lexeme);
+            *outValue = parse_array_size_lexeme(previous());
         }
 
         CSTNode* node = make_node("integer_literal");
@@ -417,7 +435,7 @@ CSTNode* Parser::parse_array_size(int* outValue) {
         }
 
         if (outValue != nullptr) {
-            *outValue = std::stoi(previous().lexeme);
+            *outValue = parse_array_size_lexeme(previous());
         }
 
         CSTNode* node = make_node("unary_expr");

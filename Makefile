@@ -1,9 +1,10 @@
 CXX      = g++
 CXXFLAGS = -std=c++17 -Wall -Wextra -O2
 
-TARGET = assignment5
+TARGET = assignment
 
-OBJS = main_pa2.o comment_stripper.o lexer.o parser.o cst.o ast.o symbol_table.o
+# OBJS = main_pa2.o comment_stripper.o lexer.o parser.o cst.o ast.o symbol_table.o
+OBJS = main_pa6.o comment_stripper.o lexer.o parser.o cst.o ast.o symbol_table.o interpreter.o
 
 all: $(TARGET)
 
@@ -12,6 +13,9 @@ $(TARGET): $(OBJS)
 
 main_pa2.o: main_pa2.cpp comment_stripper.h lexer.h parser.h cst.h ast.h tokens.h symbol_table.h
 	$(CXX) $(CXXFLAGS) -c main_pa2.cpp -o main_pa2.o
+
+main_pa6.o: main_pa6.cpp comment_stripper.h lexer.h parser.h cst.h interpreter.h tokens.h symbol_table.h
+	$(CXX) $(CXXFLAGS) -c main_pa6.cpp -o main_pa6.o
 
 comment_stripper.o: comment_stripper.cpp comment_stripper.h
 	$(CXX) $(CXXFLAGS) -c comment_stripper.cpp -o comment_stripper.o
@@ -31,5 +35,8 @@ ast.o: ast.cpp ast.h cst.h
 symbol_table.o: symbol_table.cpp symbol_table.h
 	$(CXX) $(CXXFLAGS) -c symbol_table.cpp -o symbol_table.o
 
+interpreter.o: interpreter.cpp interpreter.h cst.h
+	$(CXX) $(CXXFLAGS) -c interpreter.cpp -o interpreter.o
+
 clean:
-	rm -f $(OBJS) $(TARGET)
+	rm -f $(OBJS) $(TARGET) $(TARGET).exe
